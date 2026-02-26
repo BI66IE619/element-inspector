@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MirrorInspect Live</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+</head>
+<body class="bg-zinc-900 text-zinc-300 h-screen flex flex-col overflow-hidden">
+
+    <nav class="h-14 border-b border-zinc-800 bg-zinc-900 flex items-center px-4 gap-4">
+        <div class="font-bold text-white flex items-center gap-2">
+            <span class="text-blue-500">◈</span> MirrorInspect
+        </div>
+        <input id="urlInput" type="text" placeholder="https://example.com" 
+               class="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 transition-all">
+        <button onclick="runLoader()" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-1.5 rounded-md text-sm font-medium transition-colors">
+            Inspect
+        </button>
+    </nav>
+
+    <main class="flex-1 flex overflow-hidden">
+        <section class="w-1/2 flex flex-col">
+            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Preview</div>
+            <iframe id="displayFrame" class="w-full h-full bg-white shadow-inner"></iframe>
+        </section>
+
+        <section class="w-1/2 flex flex-col border-l border-zinc-800">
+            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800 flex justify-between">
+                <span>Source Elements</span>
+                <span id="status" class="text-blue-400">Idle</span>
+            </div>
+            <div class="flex-1 overflow-auto bg-[#1e1e1e] p-4 custom-scrollbar">
+                <pre><code id="codeBlock" class="language-html">Waiting for URL...</code></pre>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        async function runLoader() {
+            const input = document.getElementById('urlInput').value.trim();
+            if (!input) return;
+
+            const status = document.getElementById('status');
+            const codeBlock = document.getElementById('codeBlock');
+            const frame = document.getElementById('displayFrame');
+
+            const url = input.startsWith('http') ? input : `https://${input}`;
+            status.textContent = "Loading...";
+            
+            try {
+                // Fetch through our proxy
+                const response = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`);
+                const html = await response.text();
+
+                // 1. Update Code View
+                codeBlock.textContent = html;
+                hljs.highlightElement(codeBlock);
+
+                // 2. Update Iframe View
+                // Using srcdoc to inject the modified HTML directly
+                frame.srcdoc = html;
+
+                status.textContent = "Synced";
+            } catch (err) {
+                status.textContent = "Error";
+                codeBlock.textContent = "Error: " + err.message;
+            }
+        }
+
+        // Allow 'Enter' key to trigger search
+        document.getElementById('urlInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') runLoader();
+        });
+    </script>
+
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #18181b; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #52525b; }
+    </style>
+</body>
+</html>
