@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MirrorInspect Live</title>
+    <title>MirrorInspect Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
@@ -23,7 +23,7 @@
 
     <main class="flex-1 flex overflow-hidden">
         <section class="w-1/2 flex flex-col">
-            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Preview</div>
+            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Live Preview</div>
             <iframe id="displayFrame" class="w-full h-full bg-white shadow-inner"></iframe>
         </section>
 
@@ -39,38 +39,62 @@
     </main>
 
     <script>
-        async function runLoader() {
-            const input = document.getElementById('urlInput').value.trim();
+        async function runLoader(forcedUrl = null) {
+            const input = forcedUrl || document.getElementById('urlInput').value.trim();
             if (!input) return;
+
+            // Update input box if we clicked a link inside the iframe
+            if(forcedUrl) document.getElementById('urlInput').value = forcedUrl;
 
             const status = document.getElementById('status');
             const codeBlock = document.getElementById('codeBlock');
             const frame = document.getElementById('displayFrame');
 
             const url = input.startsWith('http') ? input : `https://${input}`;
+            const urlObj = new URL(url);
+            const baseUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1)}`;
+
             status.textContent = "Loading...";
             
             try {
-                // Fetch through our proxy
                 const response = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`);
-                const html = await response.text();
+                let html = await response.text();
 
-                // 1. Update Code View
+                // FIX 1: Inject <base> tag so CSS/Images load correctly from the source
+                const baseTag = `<base href="${url}">`;
+                html = html.replace('<head>', `<head>${baseTag}`);
+
+                // FIX 2: Inject Navigation Interceptor script
+                const interceptor = `
+                <script>
+                    document.querySelectorAll('a').forEach(link => {
+                        link.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            window.parent.postMessage({ type: 'navigate', url: link.href }, '*');
+                        });
+                    });
+                <\/script>`;
+                html = html.replace('</body>', `${interceptor}</body>`);
+
+                // Update UI
                 codeBlock.textContent = html;
                 hljs.highlightElement(codeBlock);
-
-                // 2. Update Iframe View
-                // Using srcdoc to inject the modified HTML directly
                 frame.srcdoc = html;
-
                 status.textContent = "Synced";
+
             } catch (err) {
                 status.textContent = "Error";
                 codeBlock.textContent = "Error: " + err.message;
             }
         }
 
-        // Allow 'Enter' key to trigger search
+        // Listen for messages from the iframe to handle "clicking around"
+        window.addEventListener('message', (event) => {
+            if (event.data.type === 'navigate') {
+                runLoader(event.data.url);
+            }
+        });
+
         document.getElementById('urlInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') runLoader();
         });
