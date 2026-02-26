@@ -3,16 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MirrorInspect Pro</title>
+    <title>MirrorInspect Real-Time</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #18181b; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        pre code.hljs { padding: 0; background: transparent; }
+    </style>
 </head>
 <body class="bg-zinc-900 text-zinc-300 h-screen flex flex-col overflow-hidden">
 
     <nav class="h-14 border-b border-zinc-800 bg-zinc-900 flex items-center px-4 gap-4">
         <div class="font-bold text-white flex items-center gap-2">
-            <span class="text-blue-500">◈</span> MirrorInspect
+            <span class="text-blue-500">◈</span> MirrorInspect <span class="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded">LIVE DOM</span>
         </div>
         <input id="urlInput" type="text" placeholder="https://example.com" 
                class="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 transition-all">
@@ -23,17 +29,17 @@
 
     <main class="flex-1 flex overflow-hidden">
         <section class="w-1/2 flex flex-col">
-            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Live Preview</div>
+            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Interactive Preview</div>
             <iframe id="displayFrame" class="w-full h-full bg-white shadow-inner"></iframe>
         </section>
 
         <section class="w-1/2 flex flex-col border-l border-zinc-800">
             <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800 flex justify-between">
-                <span>Source Elements</span>
-                <span id="status" class="text-blue-400">Idle</span>
+                <span>Live DOM Elements</span>
+                <span id="status" class="text-green-400">Ready</span>
             </div>
             <div class="flex-1 overflow-auto bg-[#1e1e1e] p-4 custom-scrollbar">
-                <pre><code id="codeBlock" class="language-html">Waiting for URL...</code></pre>
+                <pre><code id="codeBlock" class="language-html">Enter a URL to begin...</code></pre>
             </div>
         </section>
     </main>
@@ -43,7 +49,6 @@
             const input = forcedUrl || document.getElementById('urlInput').value.trim();
             if (!input) return;
 
-            // Update input box if we clicked a link inside the iframe
             if(forcedUrl) document.getElementById('urlInput').value = forcedUrl;
 
             const status = document.getElementById('status');
@@ -51,36 +56,57 @@
             const frame = document.getElementById('displayFrame');
 
             const url = input.startsWith('http') ? input : `https://${input}`;
-            const urlObj = new URL(url);
-            const baseUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1)}`;
-
-            status.textContent = "Loading...";
+            status.textContent = "Fetching...";
             
             try {
                 const response = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`);
                 let html = await response.text();
 
-                // FIX 1: Inject <base> tag so CSS/Images load correctly from the source
+                // 1. Inject <base> for styles
                 const baseTag = `<base href="${url}">`;
                 html = html.replace('<head>', `<head>${baseTag}`);
 
-                // FIX 2: Inject Navigation Interceptor script
-                const interceptor = `
+                // 2. Inject the Live Mutation Spy
+                const spyScript = `
                 <script>
-                    document.querySelectorAll('a').forEach(link => {
-                        link.addEventListener('click', (e) => {
+                    // Function to send current HTML to parent
+                    const syncDOM = () => {
+                        window.parent.postMessage({ 
+                            type: 'dom-update', 
+                            html: document.documentElement.outerHTML 
+                        }, '*');
+                    };
+
+                    // Watch for clicks and navigation
+                    document.addEventListener('click', (e) => {
+                        const link = e.target.closest('a');
+                        if (link && link.href && link.target !== '_blank') {
                             e.preventDefault();
                             window.parent.postMessage({ type: 'navigate', url: link.href }, '*');
-                        });
-                    });
-                <\/script>`;
-                html = html.replace('</body>', `${interceptor}</body>`);
+                        }
+                    }, true);
 
-                // Update UI
-                codeBlock.textContent = html;
-                hljs.highlightElement(codeBlock);
+                    // Watch for popups, toggles, and state changes
+                    const observer = new MutationObserver((mutations) => {
+                        syncDOM();
+                    });
+
+                    observer.observe(document.documentElement, {
+                        attributes: true,
+                        childList: true,
+                        subtree: true,
+                        characterData: true
+                    });
+
+                    // Initial sync
+                    window.onload = syncDOM;
+                <\/script>`;
+                
+                html = html.replace('</body>', `${spyScript}</body>`);
+
+                // Set content
                 frame.srcdoc = html;
-                status.textContent = "Synced";
+                status.textContent = "Live Sync Active";
 
             } catch (err) {
                 status.textContent = "Error";
@@ -88,10 +114,21 @@
             }
         }
 
-        // Listen for messages from the iframe to handle "clicking around"
+        // Handle messages from the injected Spy Script
         window.addEventListener('message', (event) => {
-            if (event.data.type === 'navigate') {
-                runLoader(event.data.url);
+            const { type, html, url } = event.data;
+            const codeBlock = document.getElementById('codeBlock');
+
+            if (type === 'dom-update') {
+                codeBlock.textContent = html;
+                // Only highlight if the code isn't massive (for performance)
+                if (html.length < 50000) {
+                    hljs.highlightElement(codeBlock);
+                }
+            }
+            
+            if (type === 'navigate') {
+                runLoader(url);
             }
         });
 
@@ -99,12 +136,5 @@
             if (e.key === 'Enter') runLoader();
         });
     </script>
-
-    <style>
-        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #18181b; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #52525b; }
-    </style>
 </body>
 </html>
