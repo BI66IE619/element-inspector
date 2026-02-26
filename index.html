@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MirrorInspect Real-Time</title>
+    <title>MirrorInspect Diff-Live</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
@@ -11,130 +11,132 @@
         .custom-scrollbar::-webkit-scrollbar { width: 8px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #18181b; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-        pre code.hljs { padding: 0; background: transparent; }
+        .diff-flash { animation: flash 0.5s ease-out; }
+        @keyframes flash {
+            0% { background-color: rgba(59, 130, 246, 0.5); }
+            100% { background-color: transparent; }
+        }
     </style>
 </head>
 <body class="bg-zinc-900 text-zinc-300 h-screen flex flex-col overflow-hidden">
 
     <nav class="h-14 border-b border-zinc-800 bg-zinc-900 flex items-center px-4 gap-4">
         <div class="font-bold text-white flex items-center gap-2">
-            <span class="text-blue-500">◈</span> MirrorInspect <span class="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded">LIVE DOM</span>
+            <span class="text-blue-500">◈</span> MirrorInspect <span class="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">DIFF MODE</span>
         </div>
         <input id="urlInput" type="text" placeholder="https://example.com" 
                class="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500 transition-all">
-        <button onclick="runLoader()" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-1.5 rounded-md text-sm font-medium transition-colors">
-            Inspect
-        </button>
+        <button onclick="runLoader()" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-1.5 rounded-md text-sm font-medium transition-colors">Inspect</button>
     </nav>
 
     <main class="flex-1 flex overflow-hidden">
         <section class="w-1/2 flex flex-col">
-            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Interactive Preview</div>
+            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Preview</div>
             <iframe id="displayFrame" class="w-full h-full bg-white shadow-inner"></iframe>
         </section>
 
         <section class="w-1/2 flex flex-col border-l border-zinc-800">
-            <div class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800 flex justify-between">
+            <div id="codeHeader" class="bg-zinc-800/50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800 flex justify-between items-center">
                 <span>Live DOM Elements</span>
-                <span id="status" class="text-green-400">Ready</span>
+                <div class="flex gap-4">
+                    <span id="diffStatus" class="text-zinc-500 italic">No changes detected</span>
+                    <span id="status" class="text-blue-400 font-mono">IDLE</span>
+                </div>
             </div>
-            <div class="flex-1 overflow-auto bg-[#1e1e1e] p-4 custom-scrollbar">
-                <pre><code id="codeBlock" class="language-html">Enter a URL to begin...</code></pre>
+            <div id="codeContainer" class="flex-1 overflow-auto bg-[#1e1e1e] p-4 custom-scrollbar">
+                <pre><code id="codeBlock" class="language-html">Waiting for URL...</code></pre>
             </div>
         </section>
     </main>
 
     <script>
+        let lastHtml = "";
+
         async function runLoader(forcedUrl = null) {
             const input = forcedUrl || document.getElementById('urlInput').value.trim();
             if (!input) return;
 
             if(forcedUrl) document.getElementById('urlInput').value = forcedUrl;
-
-            const status = document.getElementById('status');
-            const codeBlock = document.getElementById('codeBlock');
             const frame = document.getElementById('displayFrame');
-
             const url = input.startsWith('http') ? input : `https://${input}`;
-            status.textContent = "Fetching...";
             
+            document.getElementById('status').textContent = "FETCHING";
+
             try {
                 const response = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`);
                 let html = await response.text();
 
-                // 1. Inject <base> for styles
+                // Inject Base and the Mutation Spy
                 const baseTag = `<base href="${url}">`;
-                html = html.replace('<head>', `<head>${baseTag}`);
-
-                // 2. Inject the Live Mutation Spy
                 const spyScript = `
                 <script>
-                    // Function to send current HTML to parent
-                    const syncDOM = () => {
+                    const notifyParent = () => {
                         window.parent.postMessage({ 
                             type: 'dom-update', 
-                            html: document.documentElement.outerHTML 
+                            html: document.documentElement.outerHTML,
+                            timestamp: Date.now()
                         }, '*');
                     };
 
-                    // Watch for clicks and navigation
-                    document.addEventListener('click', (e) => {
-                        const link = e.target.closest('a');
-                        if (link && link.href && link.target !== '_blank') {
-                            e.preventDefault();
-                            window.parent.postMessage({ type: 'navigate', url: link.href }, '*');
-                        }
-                    }, true);
-
-                    // Watch for popups, toggles, and state changes
                     const observer = new MutationObserver((mutations) => {
-                        syncDOM();
+                        notifyParent();
                     });
 
                     observer.observe(document.documentElement, {
-                        attributes: true,
-                        childList: true,
-                        subtree: true,
-                        characterData: true
+                        attributes: true, childList: true, subtree: true, characterData: true
                     });
 
-                    // Initial sync
-                    window.onload = syncDOM;
-                <\/script>`;
-                
-                html = html.replace('</body>', `${spyScript}</body>`);
+                    document.addEventListener('click', (e) => {
+                        const a = e.target.closest('a');
+                        if (a && a.href && !a.href.startsWith('javascript')) {
+                            e.preventDefault();
+                            window.parent.postMessage({ type: 'navigate', url: a.href }, '*');
+                        }
+                    }, true);
 
-                // Set content
+                    window.onload = notifyParent;
+                <\/script>`;
+
+                html = html.replace('<head>', `<head>${baseTag}`).replace('</body>', `${spyScript}</body>`);
                 frame.srcdoc = html;
-                status.textContent = "Live Sync Active";
+                document.getElementById('status').textContent = "SYNCED";
 
             } catch (err) {
-                status.textContent = "Error";
-                codeBlock.textContent = "Error: " + err.message;
+                document.getElementById('status').textContent = "ERROR";
             }
         }
 
-        // Handle messages from the injected Spy Script
         window.addEventListener('message', (event) => {
-            const { type, html, url } = event.data;
-            const codeBlock = document.getElementById('codeBlock');
+            if (event.data.type === 'dom-update') {
+                const newHtml = event.data.html;
+                const codeBlock = document.getElementById('codeBlock');
+                const diffStatus = document.getElementById('diffStatus');
+                const container = document.getElementById('codeContainer');
 
-            if (type === 'dom-update') {
-                codeBlock.textContent = html;
-                // Only highlight if the code isn't massive (for performance)
-                if (html.length < 50000) {
-                    hljs.highlightElement(codeBlock);
+                if (newHtml !== lastHtml) {
+                    // Flash the header to show a diff happened
+                    const header = document.getElementById('codeHeader');
+                    header.classList.remove('diff-flash');
+                    void header.offsetWidth; // trigger reflow
+                    header.classList.add('diff-flash');
+
+                    diffStatus.textContent = "Last change: " + new Date().toLocaleTimeString();
+                    diffStatus.classList.add('text-blue-400');
+
+                    codeBlock.textContent = newHtml;
+                    
+                    // Only re-highlight if it's manageable size
+                    if (newHtml.length < 60000) {
+                        hljs.highlightElement(codeBlock);
+                    }
+                    
+                    lastHtml = newHtml;
                 }
             }
-            
-            if (type === 'navigate') {
-                runLoader(url);
-            }
+            if (event.data.type === 'navigate') runLoader(event.data.url);
         });
 
-        document.getElementById('urlInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') runLoader();
-        });
+        document.getElementById('urlInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') runLoader(); });
     </script>
 </body>
 </html>
